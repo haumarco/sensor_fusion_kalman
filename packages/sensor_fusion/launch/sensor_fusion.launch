@@ -1,0 +1,11 @@
+<launch>
+  <group ns="$(arg veh)">
+
+    <!-- Launch the encoder node to count the motor's encoder ticks                                -->
+    <!-- By the time this is run, the pigpio library ought to be installed via the launch.sh file. -->
+    <!-- If the pigpio library fails to launch, or the pigpio daemon "pigpiod" fails to launch,    -->
+    <!-- then this node will shutdown prematurely.                                                 -->
+    <node pkg="sensor_fusion" type="sensor_fusion_node.py" name="sensor_fusion_node" output="screen" />
+
+  </group>
+</launch>

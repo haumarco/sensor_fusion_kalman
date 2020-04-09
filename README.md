@@ -1,3 +1,12 @@
+# Start it:
+	build:
+	$ dts devel build -f --arch arm32v7 -H ueli.local
+	run:
+	$ docker -H ueli.local run --name sensor_fusion -it --rm --privileged --net=host duckietown/sensor_fusion_kalman:v1-arm32v7
+	or run in background:
+	$ docker -H ueli.local run -d --name sensor_fusion -it --rm --privileged --net=host duckietown/sensor_fusion_kalman:v1-arm32v7
+
+
 # Template: template-ros
 
 This template provides a boilerplate repository

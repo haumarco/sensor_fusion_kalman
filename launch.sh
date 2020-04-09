@@ -4,4 +4,5 @@ set -e
 
 # YOUR CODE BELOW THIS LINE
 # ----------------------------------------------------------------------------
-echo "This is an empty launch script. Update it to launch your application."
+echo "launch"
+roslaunch sensor_fusion sensor_fusion.launch veh:=$VEHICLE_NAME

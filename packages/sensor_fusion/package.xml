@@ -1,0 +1,12 @@
+<package>
+  <name>sensor_fusion</name>
+  <version>0.1.0</version>
+  <description>
+  None
+  </description>
+  <maintainer email="todo0@todo.com">todo</maintainer>
+  <license>None</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+</package>
