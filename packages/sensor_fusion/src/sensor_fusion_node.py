@@ -6,6 +6,8 @@ import numpy as np
 from duckietown_msgs.msg import LanePose, Twist2DStamped, EncoderTicksStamped, FusionLanePose
 from std_msgs.msg import Header
 
+from sensor_msgs.msg import CompressedImage
+
 
 
 class Sensor_Fusion(DTROS):
@@ -27,22 +29,38 @@ class Sensor_Fusion(DTROS):
 
 		self.A = np.array([])
 		self.time_last_image = 0
+		self.time_last_est = 0
 		self.B = np.zeros((2,1))
 		self.x = np.zeros((2,1))
 		self.P = np.eye(2) #
-		self.Q = 0.2 * np.eye(2) #
+		self.K = np.zeros((2,4))
+		self.Q = 0.8 * np.eye(2) #
 		self.R = 0.2 * np.eye(4) #
+		self.R[0][0] = 0.4
+		self.R[2][2] = 0.2
+		self.R[3][3] = 0.4
 		self.I = np.eye(2)
 		self.H = np.array([[1, 0], [0, 1], [1, 0], [0, 1]])
 		self.v = 0
 		self.omega = 0
+		self.save_omega = np.zeros(3)
 		self.first_encoder_meas = 0
 
-		self.encoder_state = 0
 		self.last_msg_camera_time = 0
 		self.last_camera_d = 0
 		self.last_camera_phi = 0
 
+		self.store_enc_meas = np.zeros((3,1))
+		self.ensure_turn = 0
+		self.block_turn = 0
+		self.right_turn = 0
+		self.left_turn = 0
+		self.first_calibration = 999
+		self.take_d_from_cam = 0
+
+		self.store_enc_time = np.zeros((1))
+		self.a = 0
+		self.b = 0
 
 		# Publisher
 		self.pub_pose_est = rospy.Publisher("~fusion_lane_pose", FusionLanePose, queue_size=1) # for lane_controller_node
@@ -51,11 +69,18 @@ class Sensor_Fusion(DTROS):
 		self.sub_encoder_ticks =rospy.Subscriber("encoder_ticks_node/encoder_ticks", EncoderTicksStamped, self.update_encoder_measurement, queue_size=1)
 		self.sub_camera_pose =rospy.Subscriber("lane_filter_node/lane_pose", LanePose, self.predict, queue_size=1)
 		self.sub_controls = rospy.Subscriber("lane_controller_node/car_cmd", Twist2DStamped, self.save_inputs, queue_size=1)
+		
+		#self.sub_image = rospy.Subscriber("~corrected_image/compressed", CompressedImage, self.image_taken, queue_size=1)
+		#self.sub_image = rospy.Subscriber("camera_node/image/compressed", CompressedImage, self.image_taken, queue_size=1)
 
 
 	def save_inputs(self, msg_Twist2DStamped):
 		self.v = msg_Twist2DStamped.v
 		self.omega = msg_Twist2DStamped.omega
+		self.save_omega = np.append(self.save_omega, self.omega)
+		self.save_omega = np.delete(self.save_omega, 0)
+		#rospy.loginfo("omega %s" %(self.save_omega))
+		return
 
 
 	def update_encoder_measurement(self, msg_encoder_ticks):
@@ -80,74 +105,191 @@ class Sensor_Fusion(DTROS):
 
 		if alpha == 0:
 			self.z_m[0] += self.diff_left * self.tick_to_meter * np.sin(self.z_m[1])
-			#rospy.loginfo("a")
 
 		elif self.diff_left == 0 or self.diff_right == 0:
 			self.z_m[0] += self.tick_to_meter * (self.diff_left + self.diff_right) / alpha * (np.cos(self.z_m[1] - alpha ) - np.cos(self.z_m[1]))
-			#rospy.loginfo("b")
 
 		else:
-			#self.z_m[0] -= self.tick_to_meter * 0.5 * self.wheelbase * (self.diff_left + self.diff_right) / (self.diff_right - self.diff_left) * (np.cos(self.z_m[1]) - np.cos(self.old_z_m1))
 			self.z_m[0] += self.tick_to_meter * 0.5 * (self.diff_left + self.diff_right) / alpha * (np.cos(self.old_z_m1) - np.cos(self.z_m[1]))
-			#rospy.loginfo("d1: %s" %self.z_m[0])
-			#rospy.loginfo("c")
 		
 
 		self.old_z_m1 = np.copy(self.z_m[1])
 
 		#stop = rospy.get_rostime()
-		self.encoder_state = rospy.get_rostime().secs + rospy.get_rostime().nsecs /1e9
+		encoder_time = rospy.get_rostime().secs + rospy.get_rostime().nsecs /1e9
 		#rospy.loginfo("time encoder update_ %s" % (gos - stop.secs + (gon - stop.nsecs) / 1e9 ))
+		#rospy.loginfo("left: %s  right: %s" %(self.diff_left, self.diff_right))
+		#rospy.loginfo("encoder d_e:%s phi_e:%s" %(self.z_m[0], self.z_m[1]))
 
-		rospy.loginfo("encoder d_e:%s phi_e:%s" %(self.z_m[0], self.z_m[1]))
-
+		e_states = np.vstack((self.z_m[0], self.z_m[1], encoder_time))
+		self.store_enc_meas = np.hstack((self.store_enc_meas, e_states))
+		return
 
 
 
 	def predict(self, msg_camera_pose):
+		# drive straight
+		# self.msg_fusion.header.stamp = rospy.get_rostime()
+		# self.msg_fusion.d = self.z_m[0]
+		# self.msg_fusion.phi = self.z_m[1]
+		# self.msg_fusion.in_lane = msg_camera_pose.in_lane
+		# self.msg_fusion.status = msg_camera_pose.status
+		# rospy.loginfo("%s, %s" %(self.z_m[0], self.z_m[1]))
+		# self.pub_pose_est.publish(self.msg_fusion)
+		#
+
 		#if msg_camera_pose.d == self.last_camera_d and msg_camera_pose.phi == self.last_camera_phi:
-		#	return
-
-		camera_state = msg_camera_pose.header.stamp.secs + msg_camera_pose.header.stamp.nsecs / 1e9
-		rospy.loginfo("d_c %s  phi_c %s" %(msg_camera_pose.d, msg_camera_pose.phi))
-		rospy.loginfo("delta_d %s  delta_phi %s" %(msg_camera_pose.d - self.z_m[0], msg_camera_pose.phi - self.z_m[1]))
-		rospy.loginfo("stamp: %s\n" %(camera_state))
-		self.last_msg_camera_time
-		#self.last_camera_d = msg_camera_pose.d
-		#self.last_camera_phi = msg_camera_pose.phi
-		return
-
-		
-		# time_image = msg_camera_pose.header.stamp.secs + msg_camera_pose.header.stamp.nsecs / 1e9
-		# if time_image == self.time_last_image:
+		# if self.a != msg_camera_pose.d and self.b != msg_camera_pose.phi:
 		# 	return
-		# delta_t = time_image - self.time_last_image
-		# self.A = np.array([[1, self.v * delta_t],[0, 1]])
-		# self.B = np.array([[0.5 * self.v * delta_t**2], [delta_t]])
-		# self.x = np.dot(self.A, self.x) + np.dot(self.B, self.omega)
-		# self.P = np.dot(np.dot(self.A, self.P), self.A.T) + self.Q
 
-		# self.z_m[2] = msg_camera_pose.d ##
-		# self.z_m[3] = msg_camera_pose.phi ##
-		# self.time_last_image = time_image
+		###
+		#camera_time = msg_camera_pose.header.stamp.secs + msg_camera_pose.header.stamp.nsecs / 1e9
+		# while self.store_enc_meas[2][0] < camera_time and self.store_enc_meas.shape[1] > 1:
+		# 	self.store_enc_meas = np.delete(self.store_enc_meas, 0, 1)
+		# #rospy.loginfo("c-e_d %s  c-e_phi %s" %(msg_camera_pose.d - self.store_enc_meas[0][0], msg_camera_pose.phi - self.store_enc_meas[1][0]))
+		# ##rospy.loginfo("c_d %s  c_phi %s" %(msg_camera_pose.d, msg_camera_pose.phi ))
 
-		# self.update()
+		#rospy.loginfo("cam %s  enc %s" %(camera_time, self.store_enc_time[1]))
+		# self.a = msg_camera_pose.d
+		# self.b = msg_camera_pose.phi
+
+		time_now = rospy.get_rostime().secs + rospy.get_rostime().nsecs / 1e9
+		if time_now - self.block_turn > 3:
+			if msg_camera_pose.phi > 0.85 and self.z_m[1] < 0.4: # right turn
+				self.ensure_turn += 1
+				if self.ensure_turn > 2:
+					rospy.loginfo("-------------------- RIGHT TURN --------------------")
+					#self.z_m[1] += 0.5 * np.pi
+					self.block_turn = rospy.get_rostime().secs + rospy.get_rostime().nsecs / 1e9
+					self.ensure_turn = 0
+					self.right_turn = 1
+
+			elif msg_camera_pose.phi < -0.55 and self.z_m[1] > -0.2: # left turn
+				self.ensure_turn += 1
+				if self.ensure_turn > 2:
+					rospy.loginfo("-------------------- LEFT TURN --------------------")
+					#self.z_m[1] -= 0.5 * np.pi
+					self.block_turn = rospy.get_rostime().secs + rospy.get_rostime().nsecs / 1e9
+					self.ensure_turn = 0
+					self.left_turn = 1
+			else:
+				self.ensure_turn = 0
+
+		elif time_now - self.block_turn < 2 and self.right_turn > 0:
+			self.take_d_from_cam = 1
+		elif time_now - self.block_turn < 3 and self.left_turn > 0:
+			self.take_d_from_cam = 1
+
+
+
+		if self.right_turn > 0 and self.right_turn < 6:
+			if self.right_turn == 1:
+				self.z_m[1] += 0.3 * np.pi
+			else:
+				self.z_m[1] += 0.05 * np.pi
+			self.right_turn += 1
+
+		if self.left_turn > 0 and self.left_turn < 14:
+			if self.left_turn == 1:
+				self.z_m[1] -= 0.2 * np.pi
+			else:
+				self.z_m[1] -= 0.025 * np.pi
+			self.left_turn += 1
+		
+		if self.right_turn ==6 or self.left_turn == 14:
+			rospy.loginfo("done phi adjusting")
+			#self.left_turn = 0
+			#self.right_turn = 0
+
+
+
+		#rospy.loginfo("%s %s" %(msg_camera_pose.d, msg_camera_pose.phi))
+		# self.msg_fusion.d = msg_camera_pose.d
+		# self.msg_fusion.phi = msg_camera_pose.phi
+		# self.pub_pose_est.publish(self.msg_fusion)
+		
+		##
+		
+		#rospy.loginfo("old_d_e %s  old_phi_e %s" %(self.store_enc_meas[0][0], self.store_enc_meas[1][0]))
+		#rospy.loginfo("dt %s" %(self.store_enc_meas[2][0] - camera_time))
+
+
+		# self.store_enc_time = np.delete(self.store_enc_time, [1])
+		# self.store_enc_meas = np.delete(self.store_enc_meas, [1,2])
+		# rospy.loginfo("delta_d %s  delta_phi %s" %(msg_camera_pose.d - self.z_m[0], msg_camera_pose.phi - self.z_m[1]))
+		# rospy.loginfo("stamp: %s\n" %(camera_state))
+		# self.last_msg_camera_time
+		# self.last_camera_d = msg_camera_pose.d
+		# self.last_camera_phi = msg_camera_pose.phi
+
+		#return
+
+		## predict part
+
+		if self.first_calibration < 100:
+			#rospy.loginfo("start_calib")
+			self.z_m[0] += 0.007 * msg_camera_pose.d
+			self.z_m[1] += 0.007 * msg_camera_pose.phi
+			self.first_calibration += 1
+			if self.first_calibration == 100:
+				self.time_last_est = rospy.get_rostime().secs + rospy.get_rostime().nsecs / 1e9
+				self.time_last_image = self.time_last_est
+
+		else:
+			#time_now = rospy.get_rostime().secs + rospy.get_rostime().nsecs / 1e9
+			delta_t = time_now - self.time_last_est
+			time_image = msg_camera_pose.header.stamp.secs + msg_camera_pose.header.stamp.nsecs / 1e9
+
+			self.A = np.array([[1, self.v * delta_t],[0, 1]])
+			self.B = np.array([[0.5 * self.v * delta_t**2], [delta_t]])
+			self.x = np.dot(self.A, self.x) + np.dot(self.B, self.omega)
+			self.P = np.dot(np.dot(self.A, self.P), self.A.T) + self.Q
+			# delta_t1 = delta_t
+			# delta_t = time_now - time_image
+			# self.A = np.array([[1, self.v * delta_t],[0, 1]])
+			# self.B = np.array([[0.5 * self.v * delta_t**2], [delta_t]])
+			x_cam = np.array([[msg_camera_pose.d],[msg_camera_pose.phi]])
+			# x_cam = np.dot(self.A, x_cam) + np.dot(self.B, np.average(self.save_omega))
+			self.z_m[2] = x_cam[0][0]
+			self.z_m[3] = x_cam[1][0]
+
+			self.time_last_est = time_now
+
+			#rospy.loginfo("dt [%s] [%s]" %(delta_t1, delta_t))
+			#rospy.loginfo("omega: %s" %(np.average(self.omega)))
+			#rospy.loginfo("raw_cam: %s  %s" %(msg_camera_pose.d, msg_camera_pose.phi))
+
+
+			self.update()
+		return
 
 
 	def update(self):
-		return
-		# S = np.dot(np.dot(self.H, self.P), self.H.T) + self.R
-		# self.K = np.dot(np.dot(self.P, self.H.T), np.linalg.inv(S))
-		# y = self.z_m - np.dot(self.H, self.x)
-		# self.x += np.dot(self.K, y)
-		# J = self.I - np.dot(self.K, self.H)
-		# self.P = np.dot(J, self.P)
-		# self.msg_fusion.header.stamp = rospy.get_rostime()
-		# self.msg_fusion.d = self.x[0]
-		# self.msg_fusion.phi = self.x[1]
-		# self.pub_pose_est.publish(self.msg_fusion)
-		# rospy.loginfo("update d:%s phi:%s" %(self.msg_fusion.d, self.msg_fusion.phi))
+		#return
+		# update part
+		S = np.dot(np.dot(self.H, self.P), self.H.T) + self.R
+		self.K = np.dot(np.dot(self.P, self.H.T), np.linalg.inv(S))
 
+		if self.take_d_from_cam == 1:
+			rospy.loginfo("take d form cam")
+			self.take_d_from_cam = 0
+			self.z_m[0] = self.z_m[2]
+
+		y = self.z_m - np.dot(self.H, self.x)
+		self.x += np.dot(self.K, y)
+		J = self.I - np.dot(self.K, self.H)
+		self.P = np.dot(J, self.P)
+		self.msg_fusion.header.stamp = rospy.get_rostime()
+		self.msg_fusion.d = self.x[0]
+		self.msg_fusion.phi = self.x[1]
+		self.pub_pose_est.publish(self.msg_fusion)
+
+		rospy.loginfo("update: %s  %s" %(self.msg_fusion.d, self.msg_fusion.phi))
+		rospy.loginfo("camera: %s  %s" %(self.z_m[2], self.z_m[3]))
+		rospy.loginfo("encoder: %s  %s" %(self.z_m[0], self.z_m[1]))
+
+		#rospy.loginfo("K\n%s\nP\n%s\n" %(self.K, self.P))
+		return
 
 
 
