@@ -132,6 +132,56 @@ class Sensor_Fusion(DTROS):
 		return
 
 
+	def curve_detection(self, time_now, phi_cam):
+		if time_now - self.block_turn > 2.5 :
+
+			if self.recalib_status == 1 or ( self.recalib_status == 2 and time_now - self.block_turn > 3.5 ):
+				self.i_recalib = 0
+				self.recalib_status = 0
+
+			if phi_cam > 0.85 and self.z_m[1] < 0.4: # right turn
+				self.ensure_turn += 1
+				if self.ensure_turn > 2:
+					rospy.loginfo("-------------------- RIGHT TURN --------------------")
+					self.block_turn = time_now
+					self.ensure_turn = 0
+					self.right_turn = 1
+					self.recalib_status = 1
+
+			elif phi_cam < -0.55 and self.z_m[1] > -0.2 and self.z_m[1] < 0.5 and abs(self.z_m[2]) < 0.11 and time_now - self.block_turn > 3.5: # left turn
+				self.ensure_turn += 1
+				if self.ensure_turn > 2:
+					rospy.loginfo("-------------------- LEFT TURN --------------------")
+					self.block_turn = time_now
+					self.ensure_turn = 0
+					self.left_turn = 1
+					self.recalib_status = 2
+
+			else:
+				self.ensure_turn = 0
+
+
+		if self.right_turn > 0 and self.right_turn < 10:
+			if self.right_turn == 1:
+				self.z_m[1] += 0.1 * np.pi
+			else:
+				self.z_m[1] += 0.05 * np.pi
+			if self.right_turn == 5:
+				rospy.loginfo("end adjusting")
+			self.right_turn += 1
+
+
+		if self.left_turn > 0 and self.left_turn < 25: 
+			if self.left_turn == 1:
+				self.z_m[1] -= 0.04 * np.pi
+			else:
+				self.z_m[1] -= 0.02 * np.pi
+			if self.left_turn == 24:
+				rospy.loginfo("end adjusting")
+			self.left_turn += 1
+
+
+
 
 	def first_calibration(self, phi_cam):
 		#self.z_m[0] += 0.015 * msg_camera_pose.d
@@ -215,76 +265,12 @@ class Sensor_Fusion(DTROS):
 		self.recalibration()
 
 		time_now = rospy.get_rostime().secs + rospy.get_rostime().nsecs / 1e9
-		if time_now - self.block_turn > 2.5 :
 
-			if self.recalib_status == 1 or ( self.recalib_status == 2 and time_now - self.block_turn > 3.5 ):
-				self.i_recalib = 0
-				self.recalib_status = 0
-
-			if msg_camera_pose.phi > 0.85 and self.z_m[1] < 0.4: # right turn
-				self.ensure_turn += 1
-				if self.ensure_turn > 2:
-					rospy.loginfo("-------------------- RIGHT TURN --------------------")
-					self.block_turn = time_now
-					self.ensure_turn = 0
-					self.right_turn = 1
-					self.recalib_status = 1
-
-			elif msg_camera_pose.phi < -0.55 and self.z_m[1] > -0.2 and self.z_m[1] < 0.5 and abs(self.z_m[2]) < 0.11 and time_now - self.block_turn > 3.5: # left turn
-				self.ensure_turn += 1
-				if self.ensure_turn > 2:
-					rospy.loginfo("-------------------- LEFT TURN --------------------")
-					self.block_turn = time_now
-					self.ensure_turn = 0
-					self.left_turn = 1
-					self.recalib_status = 2
-
-			else:
-				self.ensure_turn = 0
-
-				
-
-		# elif time_now - self.block_turn < 2.5 and self.right_turn > 0:
-		# 	self.take_d_from_cam = 1
-
-		# elif time_now - self.block_turn < 3 and self.left_turn > 0:
-		# 	self.take_d_from_cam = 1
-
-		# test: time to adjust angle
-		# if (self.right_turn > 4 or self.left_turn >4) and self.a == 0:
-		# 	if self.z_m[1] < 0.4:
-		# 		rospy.loginfo("%s" %(time_now - self.block_turn))
-		# 		self.a = 1
-
-
-		if self.right_turn > 0 and self.right_turn < 10:
-			if self.right_turn == 1:
-				self.z_m[1] += 0.1 * np.pi
-			else:
-				self.z_m[1] += 0.05 * np.pi   ###### eigentlich 0.05 (((- 0.065
-			if self.right_turn == 5:
-				rospy.loginfo("end adjusting")
-			self.right_turn += 1
-
-
-		if self.left_turn > 0 and self.left_turn < 25: 
-			if self.left_turn == 1:
-				self.z_m[1] -= 0.04 * np.pi ##0.2, 14, 0.025; 0.1, 18, 0.025;; 0.05 20 0.025;
-			else:
-				self.z_m[1] -= 0.02 * np.pi
-			if self.left_turn == 24:
-				rospy.loginfo("end adjusting")
-			self.left_turn += 1
-
-
-		
+		self.curve_detection(time_now, msg_camera_pose.phi)
 
 
 		## predict part
-
-
 		
-		#time_now = rospy.get_rostime().secs + rospy.get_rostime().nsecs / 1e9
 		delta_t = time_now - self.time_last_est
 		time_image = msg_camera_pose.header.stamp.secs + msg_camera_pose.header.stamp.nsecs / 1e9 #nu
 
@@ -302,10 +288,8 @@ class Sensor_Fusion(DTROS):
 		self.x = np.dot(self.A, self.x) + np.dot(self.B, self.omega)
 		self.P = np.dot(np.dot(self.A, self.P), self.A.T) + self.Q
 
-		x_cam = np.array([[msg_camera_pose.d],[msg_camera_pose.phi]])
-		# x_cam = np.dot(self.A, x_cam) + np.dot(self.B, np.average(self.save_omega))
-		self.z_m[2] = x_cam[0][0] #unnecessary
-		self.z_m[3] = x_cam[1][0]
+		self.z_m[2] = msg_camera_pose.d
+		self.z_m[3] = msg_camera_pose.phi
 
 		self.time_last_est = time_now
 
@@ -314,7 +298,7 @@ class Sensor_Fusion(DTROS):
 
 
 	def update(self):
-		#return
+
 		# update part
 		S = np.dot(np.dot(self.H, self.P), self.H.T) + self.R
 		self.K = np.dot(np.dot(self.P, self.H.T), np.linalg.inv(S))
