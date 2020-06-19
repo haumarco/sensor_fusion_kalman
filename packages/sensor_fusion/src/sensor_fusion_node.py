@@ -105,9 +105,10 @@ class Sensor_Fusion(DTROS):
 		alpha = self.tick_to_meter * (self.diff_right - self.diff_left) / self.wheelbase /1.04
 
 		if self.diff_left == 0 or self.diff_right == 0:
-			alpha = alpha /1.04
-			if self.diff_left > 6 or self.diff_right > 6:
+			alpha = alpha /1.05 #1.04
+			if self.diff_left > 8 or self.diff_right > 8: 
 				alpha = alpha * 0.85
+				rospy.logwarn("SLIP")
 
 		self.z_m[1] += alpha
 
@@ -132,24 +133,25 @@ class Sensor_Fusion(DTROS):
 		return
 
 
-	def curve_detection(self, time_now, phi_cam):
-		if time_now - self.block_turn > 2.5 :
+	def curve_detection(self, time_now):
+		if time_now - self.block_turn > 3 : ##2.5,2.8
 
 			if self.recalib_status == 1 or ( self.recalib_status == 2 and time_now - self.block_turn > 3.5 ):
 				self.i_recalib = 0
 				self.recalib_status = 0
 
-			if phi_cam > 0.85 and self.z_m[1] < 0.4: # right turn
-				self.ensure_turn += 1
-				if self.ensure_turn > 2:
+			if self.z_m[3] > 0.85 and self.z_m[1] < 0.4: # right turn
+				self.ensure_turn -= 1
+				if self.ensure_turn < -2:
 					rospy.loginfo("-------------------- RIGHT TURN --------------------")
 					self.block_turn = time_now
 					self.ensure_turn = 0
 					self.right_turn = 1
 					self.recalib_status = 1
 
-			elif phi_cam < -0.55 and self.z_m[1] > -0.2 and self.z_m[1] < 0.5 and abs(self.z_m[2]) < 0.11 and time_now - self.block_turn > 3.5: # left turn
+			elif self.z_m[3] < -0.55 and self.z_m[1] > -0.2 and self.z_m[1] < 0.5 and abs(self.z_m[2]) < 0.11 and time_now - self.block_turn > 3.5: # left turn
 				self.ensure_turn += 1
+				rospy.loginfo("ensure %s" %(self.z_m[1]))
 				if self.ensure_turn > 2:
 					rospy.loginfo("-------------------- LEFT TURN --------------------")
 					self.block_turn = time_now
@@ -161,13 +163,13 @@ class Sensor_Fusion(DTROS):
 				self.ensure_turn = 0
 
 
-		if self.right_turn > 0 and self.right_turn < 10:
+		if self.right_turn > 0 and self.right_turn < 12: #10,0.1,0.05
 			if self.right_turn == 1:
 				self.z_m[1] += 0.1 * np.pi
 			else:
-				self.z_m[1] += 0.05 * np.pi
-			if self.right_turn == 5:
-				rospy.loginfo("end adjusting")
+				self.z_m[1] += 0.04 * np.pi
+			#if self.right_turn == 5:
+				#rospy.loginfo("end adjusting")
 			self.right_turn += 1
 
 
@@ -176,8 +178,8 @@ class Sensor_Fusion(DTROS):
 				self.z_m[1] -= 0.04 * np.pi
 			else:
 				self.z_m[1] -= 0.02 * np.pi
-			if self.left_turn == 24:
-				rospy.loginfo("end adjusting")
+			#if self.left_turn == 24:
+				#rospy.loginfo("end adjusting")
 			self.left_turn += 1
 
 
@@ -218,7 +220,7 @@ class Sensor_Fusion(DTROS):
 				if diff_recalib < 0.05 and abs(self.average_d_cam) < 0.1 and abs(self.average_phi_cam) < 0.1:
 					self.z_m[1] = 0.3 * self.z_m[1] + 0.3 * self.average_phi_cam
 					#self.z_m[1] *= 0.5
-					rospy.logwarn("RECALIBRATION")
+					rospy.logwarn("RECALIBRATION %s, %s" %(self.average_phi_cam, self.average_d_cam))
 
 
 
@@ -261,12 +263,14 @@ class Sensor_Fusion(DTROS):
 			self.first_calibration(msg_camera_pose.phi)
 			return
 
+		self.z_m[2] = msg_camera_pose.d
+		self.z_m[3] = msg_camera_pose.phi
 
 		self.recalibration()
 
 		time_now = rospy.get_rostime().secs + rospy.get_rostime().nsecs / 1e9
 
-		self.curve_detection(time_now, msg_camera_pose.phi)
+		self.curve_detection(time_now)
 
 
 		## predict part
@@ -288,8 +292,6 @@ class Sensor_Fusion(DTROS):
 		self.x = np.dot(self.A, self.x) + np.dot(self.B, self.omega)
 		self.P = np.dot(np.dot(self.A, self.P), self.A.T) + self.Q
 
-		self.z_m[2] = msg_camera_pose.d
-		self.z_m[3] = msg_camera_pose.phi
 
 		self.time_last_est = time_now
 
@@ -323,7 +325,11 @@ class Sensor_Fusion(DTROS):
 		# rospy.loginfo("e %s  %s" %(self.z_m[0], self.z_m[1]))
 		rospy.loginfo("u %s %s c %s %s e %s %s" %(self.msg_fusion.d, self.msg_fusion.phi, self.z_m[2], self.z_m[3], self.z_m[0], self.z_m[1]))
 
-		#rospy.loginfo("\nK\n%s\nP\n%s\n" %(self.K, self.P))
+		# rospy.loginfo(",K,%s,%s,%s,%s;%s,%s,%s,%s" %(self.K[0][0],self.K[0][1],self.K[0][2],self.K[0][3],self.K[1][0],self.K[1][1],self.K[1][2],self.K[1][3]))
+		# rospy.loginfo(",P,%s,%s;%s,%s" %(self.P[0][0],self.P[0][1],self.P[1][0],self.P[1][1]))
+		# rospy.loginfo(",A,%s,%s;%s,%s" %(self.A[0][0],self.A[0][1],self.A[1][0],self.A[1][1]))
+		# rospy.loginfo(",B,%s;%s" %(self.B[0],self.B[1]))
+		
 		return
 
 
