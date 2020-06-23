@@ -24,8 +24,7 @@ class Sensor_Fusion(DTROS):
 		self.tick_to_meter = np.pi * 0.067 / 135.   # 6.5cm diameter, 135 = #ticks per revolution
 		self.z_m = np.zeros((4, 1)) # d_enc, phi_enc, d_cam, phi_cam
 		self.old_z_m1 = 0
-		self.wheelbase = 0.101 # ueli 1: 0.104, ueli 2: 0.101
-		self.corretion_factor = 1.03 # ueli 1: 1.05, ueli 2: 1.03
+		self.wheelbase = 0.101
 		self.msg_fusion = FusionLanePose()
 
 		self.A = np.array([])
@@ -68,6 +67,9 @@ class Sensor_Fusion(DTROS):
 		self.i_recalib = 0
 		self.recalib_status = 0
 		##
+		self.count_curves_axle = 0
+		self.phi_tot = 0
+		self.phi_0 = 0
 		self.distance = 0
 		self.cs_transform = 0
 		self.a = 0
@@ -105,11 +107,12 @@ class Sensor_Fusion(DTROS):
 
 		alpha = self.tick_to_meter * (self.diff_right - self.diff_left) / self.wheelbase
 		# ueli 1: 1.04, ueli 2: 1.01
+		self.phi_tot += alpha
+
 		if self.diff_left == 0 or self.diff_right == 0:
-			alpha = alpha /self.corretion_factor
-			if self.diff_left > 8 or self.diff_right > 8: 
-				alpha = alpha * 0.85
-				rospy.logwarn("SLIP")
+			self.phi_0 += alpha
+			alpha = alpha /1.05 #1.04
+		
 
 		self.z_m[1] += alpha
 
@@ -151,6 +154,7 @@ class Sensor_Fusion(DTROS):
 					self.ensure_turn = 0
 					self.right_turn = 1
 					self.recalib_status = 1
+					self.count_curves_axle += 0.5 * np.pi
 
 			elif self.z_m[3] < -0.55 and self.z_m[1] > -0.2 and self.z_m[1] < 0.5 and abs(self.z_m[2]) < 0.11 and self.distance - self.block_turn > 1.1: # left turn
 				self.ensure_turn += 1
@@ -161,9 +165,11 @@ class Sensor_Fusion(DTROS):
 					self.ensure_turn = 0
 					self.left_turn = 1
 					self.recalib_status = 2
+					self.count_curves_axle -= 0.5 * np.pi
 
 			else:
 				self.ensure_turn = 0
+
 
 
 		if self.right_turn > 0 and self.right_turn < 3:
@@ -342,11 +348,15 @@ class Sensor_Fusion(DTROS):
 		# rospy.loginfo(",P,%s,%s;%s,%s" %(self.P[0][0],self.P[0][1],self.P[1][0],self.P[1][1]))
 		# rospy.loginfo(",A,%s,%s;%s,%s" %(self.A[0][0],self.A[0][1],self.A[1][0],self.A[1][1]))
 		# rospy.loginfo(",B,%s;%s" %(self.B[0],self.B[1]))
-		
+
+
+		if self.count_curves_axle != 0:
+			axle = self.wheelbase * abs(self.phi_tot / self.count_curves_axle )
+			corrfactor = abs(self.phi_0) / (abs(self.count_curves_axle) - abs(self.phi_tot) + abs(self.phi_0))
+			rospy.loginfo("phi: %s  axle: %s  corr: %s  phi0: %s" %(self.phi_tot, axle, corrfactor, self.phi_0))
+
 		return
-
-
-
+		
 if __name__ == '__main__':
 	node = Sensor_Fusion(node_name='my_sensor_fusion_node')
 	rospy.loginfo("sensor_fusion_node is up and running...")
