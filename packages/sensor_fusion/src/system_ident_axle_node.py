@@ -24,7 +24,7 @@ class Sensor_Fusion(DTROS):
 		self.tick_to_meter = np.pi * 0.067 / 135.   # 6.5cm diameter, 135 = #ticks per revolution
 		self.z_m = np.zeros((4, 1)) # d_enc, phi_enc, d_cam, phi_cam
 		self.old_z_m1 = 0
-		self.wheelbase = 0.101
+		self.wheelbase = 0.102
 		self.msg_fusion = FusionLanePose()
 
 		self.A = np.array([])
@@ -107,11 +107,11 @@ class Sensor_Fusion(DTROS):
 
 		alpha = self.tick_to_meter * (self.diff_right - self.diff_left) / self.wheelbase
 		# ueli 1: 1.04, ueli 2: 1.01
-		self.phi_tot += alpha
+		self.phi_tot += alpha * 1.02
 
-		if self.diff_left == 0 or self.diff_right == 0:
-			self.phi_0 += alpha
-			alpha = alpha /1.05 #1.04
+		# if self.diff_left == 0 or self.diff_right == 0:
+		# 	self.phi_0 += alpha
+		# 	alpha = alpha /1.05 #1.04
 		
 
 		self.z_m[1] += alpha
@@ -263,11 +263,12 @@ class Sensor_Fusion(DTROS):
 
 		#only camera pose
 		# self.msg_fusion.header.stamp = rospy.get_rostime()
-		# rospy.loginfo("%s %s" %(msg_camera_pose.d, msg_camera_pose.phi))
+		# #rospy.loginfo("%s %s" %(msg_camera_pose.d, msg_camera_pose.phi))
 		# self.msg_fusion.d = msg_camera_pose.d
 		# self.msg_fusion.phi = msg_camera_pose.phi
 		# self.pub_pose_est.publish(self.msg_fusion)
-		# rospy.loginfo("e %s  %s" %(self.z_m[0], self.z_m[1]))
+		# rospy.loginfo("c [%s] [%s] e %s" %(msg_camera_pose.d, msg_camera_pose.phi, self.z_m[1]))
+
 		# return
 
 		###
@@ -351,7 +352,7 @@ class Sensor_Fusion(DTROS):
 
 
 		if self.count_curves_axle != 0:
-			axle = self.wheelbase * abs(self.phi_tot / self.count_curves_axle )
+			axle = 0.1 * abs(self.phi_tot / self.count_curves_axle )
 			corrfactor = abs(self.phi_0) / (abs(self.count_curves_axle) - abs(self.phi_tot) + abs(self.phi_0))
 			rospy.loginfo("phi: %s  axle: %s  corr: %s  phi0: %s" %(self.phi_tot, axle, corrfactor, self.phi_0))
 

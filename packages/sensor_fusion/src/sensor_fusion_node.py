@@ -24,8 +24,8 @@ class Sensor_Fusion(DTROS):
 		self.tick_to_meter = np.pi * 0.067 / 135.   # 6.5cm diameter, 135 = #ticks per revolution
 		self.z_m = np.zeros((4, 1)) # d_enc, phi_enc, d_cam, phi_cam
 		self.old_z_m1 = 0
-		self.wheelbase = 0.101 # ueli 1: 0.104, ueli 2: 0.101
-		self.corretion_factor = 1.03 # ueli 1: 1.05, ueli 2: 1.03
+		self.wheelbase = 0.103 # ueli 1: 0.104, ueli 2: 0.101----1.03
+		self.corretion_factor = 1.05 # ueli 1: 1.05, ueli 2: 1.03---- 1
 		self.msg_fusion = FusionLanePose()
 
 		self.A = np.array([])
@@ -53,7 +53,10 @@ class Sensor_Fusion(DTROS):
 
 		self.store_enc_meas = np.zeros((3,1))
 		self.ensure_turn = 0
-		self.block_turn = -1.05
+		self.length_left_curve = 0.65
+		self.length_right_curve = 0.25
+		self.block_turn_l = -self.length_left_curve -self.length_right_curve + 0.05
+		self.block_turn_r = -self.length_right_curve - 0.25
 		self.right_turn = 0
 		self.left_turn = 0
 		self.i_first_calibration = 0 # number of iterat. for first calib
@@ -79,7 +82,6 @@ class Sensor_Fusion(DTROS):
 		# Subscriber
 		self.sub_encoder_ticks =rospy.Subscriber("encoder_ticks_node/encoder_ticks", EncoderTicksStamped, self.update_encoder_measurement, queue_size=1)
 		self.sub_camera_pose =rospy.Subscriber("lane_filter_node/lane_pose", LanePose, self.predict, queue_size=1)
-		#self.sub_controls = rospy.Subscriber("lane_controller_node/car_cmd", Twist2DStamped, self.save_inputs, queue_size=1)
 		self.sub_controls = rospy.Subscriber("lane_controller_node/car_cmd", Twist2DStamped, self.save_inputs, queue_size=1)	
 
 
@@ -105,15 +107,18 @@ class Sensor_Fusion(DTROS):
 
 		alpha = self.tick_to_meter * (self.diff_right - self.diff_left) / self.wheelbase
 		# ueli 1: 1.04, ueli 2: 1.01
-		if self.diff_left == 0 or self.diff_right == 0:
-			alpha = alpha /self.corretion_factor
-			if self.diff_left > 8 or self.diff_right > 8: 
-				alpha = alpha * 0.85
-				rospy.logwarn("SLIP")
+		# if self.diff_left == 0 or self.diff_right == 0:
+		# 	self.a += alpha
+		# 	alpha = alpha /self.corretion_factor
+		# 	if self.diff_left > 8 or self.diff_right > 8:
+		# 		alpha = alpha * 0.85
+		# 		#rospy.logwarn("SLIP")
 
+		self.b += alpha
 		self.z_m[1] += alpha
 
 		self.distance += self.tick_to_meter * 0.5 * (self.diff_left + self.diff_right)
+
 
 		# if alpha == 0:
 		# 	self.z_m[0] += self.diff_left * self.tick_to_meter * np.sin(self.z_m[1]) 
@@ -137,52 +142,60 @@ class Sensor_Fusion(DTROS):
 
 
 	def curve_detection(self, time_now):
-		if self.distance - self.block_turn > 0.3 : ##2.5,2.8
 
-			if self.recalib_status == 1 or ( self.recalib_status == 2 and self.distance - self.block_turn > 0.8 ):
-				self.i_recalib = 0
-				self.recalib_status = 0
+		if self.distance - self.block_turn_r > self.length_right_curve and self.distance - self.block_turn_l > self.length_left_curve:
 
-			if self.z_m[3] > 0.85 and self.z_m[1] < 0.4: # right turn
-				self.ensure_turn -= 1
-				if self.ensure_turn < -2:
-					rospy.loginfo("-------------------- RIGHT TURN --------------------")
-					self.block_turn = self.distance
+			#if (self.recalib_status == 1 and self.distance - self.block_turn_r > self.length_right_curve) or ( self.recalib_status == 2 and self.distance - self.block_turn_l > self.length_left_curve ):
+			if self.recalib_status == 1 or self.recalib_status == 2:
+					self.i_recalib = 0
+					self.recalib_status = 0
+					
+			if self.distance -self.block_turn_r > self.length_right_curve + 0.3: # 30cm because length_straight_tile > length_left_curve
+
+				if self.z_m[3] > 0.85 and self.z_m[1] < 0.4: # right turn
+					self.ensure_turn -= 1
+					if self.ensure_turn < -2:
+						rospy.loginfo("-------------------- RIGHT TURN --------------------")
+						self.block_turn_r = self.distance
+						self.ensure_turn = 0
+						self.right_turn = 1
+						self.recalib_status = 1
+				elif self.ensure_turn < 0:
 					self.ensure_turn = 0
-					self.right_turn = 1
-					self.recalib_status = 1
 
-			elif self.z_m[3] < -0.55 and self.z_m[1] > -0.2 and self.z_m[1] < 0.5 and abs(self.z_m[2]) < 0.11 and self.distance - self.block_turn > 1.1: # left turn
-				self.ensure_turn += 1
-				#rospy.loginfo("ensure %s" %(self.z_m[1]))
-				if self.ensure_turn > 2:
-					rospy.loginfo("-------------------- LEFT TURN --------------------")
-					self.block_turn = self.distance
+			if self.distance -  self.block_turn_l > self.length_right_curve + self.length_right_curve: # 0.65 curve lenght + 0.25 right tile
+
+				if self.z_m[3] < -0.55 and self.z_m[1] > -0.2 and self.z_m[1] < 0.5 and abs(self.z_m[2]) < 0.11: # left turn
+					self.ensure_turn += 1
+					if self.ensure_turn > 2:
+						rospy.loginfo("-------------------- LEFT TURN --------------------")
+						self.block_turn_l = self.distance
+						self.ensure_turn = 0
+						self.left_turn = 1
+						self.recalib_status = 2
+				elif self.ensure_turn > 0:
 					self.ensure_turn = 0
-					self.left_turn = 1
-					self.recalib_status = 2
-
-			else:
-				self.ensure_turn = 0
 
 
-		if self.right_turn > 0 and self.right_turn < 3:
-			if self.right_turn == 1:
-				self.z_m[1] += 0.1 * np.pi
-				self.right_turn = 2
+
+
+	def wheel_encdoer_coordinate_system_rotation(self):
+
+		if self.right_turn == 1:
 			self.z_m[1] -= self.cs_transform
-			self.cs_transform = (self.distance - self.block_turn) / 0.25 * np.pi #adjust in 0.1m
-			if self.cs_transform > 0.4 * np.pi:
-				self.cs_transform = 0.4 * np.pi
+			self.cs_transform = (self.distance - self.block_turn_r) / self.length_right_curve * np.pi #adjust in 0.1m 0.2
+			if self.cs_transform > 0.5 * np.pi:
+				self.cs_transform = 0.5 * np.pi
 				self.z_m[1] += self.cs_transform
 				self.cs_transform = 0
-				self.right_turn = 3
+				self.right_turn = 0
 			else:
 				self.z_m[1] += self.cs_transform
+				
 
-		if self.left_turn !=0:
+		if self.left_turn == 1:
 			self.z_m[1] -= self.cs_transform
-			self.cs_transform = -(self.distance - self.block_turn) / 0.8 * np.pi #adjust in 0.4m
+			self.cs_transform = -(self.distance - self.block_turn_l) / self.length_left_curve * np.pi #adjust in 0.4m 0.8
 			if self.cs_transform < -0.5 * np.pi:
 				self.cs_transform = -0.5 * np.pi
 				self.z_m[1] += self.cs_transform
@@ -191,14 +204,12 @@ class Sensor_Fusion(DTROS):
 			else:
 				self.z_m[1] += self.cs_transform
 		
-		
-
-
+	
 
 
 	def first_calibration(self, phi_cam):
 		#self.z_m[0] += 0.015 * msg_camera_pose.d
-		self.z_m[1] += 0.015 * phi_cam
+		self.z_m[1] += 0.015 * phi_cam 
 		self.i_first_calibration += 1
 
 		if self.i_first_calibration == 50:
@@ -229,12 +240,12 @@ class Sensor_Fusion(DTROS):
 
 				#rospy.loginfo("%s %s %s" %(self.average_d_cam, self.average_phi_cam, diff_recalib))
 				if diff_recalib < 0.05 and abs(self.average_d_cam) < 0.1 and abs(self.average_phi_cam) < 0.1:
-					self.z_m[1] = 0.3 * self.z_m[1] + 0.3 * self.average_phi_cam
-					#self.z_m[1] *= 0.5
-					#rospy.logwarn("RECALIBRATION %s, %s" %(self.average_phi_cam, self.average_d_cam))
-					rospy.logwarn("RECALIBRATION")
-
-
+					#self.z_m[1] = 0.3 * self.z_m[1] + 0.3 * self.average_phi_cam
+					old = self.z_m[1]
+					self.z_m[1] = 0.5 * self.average_d_cam + 0.5 * self.z_m[1]
+					rospy.logwarn("RECALIBRATION av_phi%s, old %s, new %s" %(self.average_phi_cam, old, self.z_m[1]))
+					self.recalib_status = 3
+					#rospy.logwarn("RECALIBRATION")
 
 			else:
 				self.save_phi_enc[self.i_recalib] = self.z_m[1]
@@ -255,14 +266,6 @@ class Sensor_Fusion(DTROS):
 		# self.pub_pose_est.publish(self.msg_fusion)
 		# return
 
-		#only camera pose
-		# self.msg_fusion.header.stamp = rospy.get_rostime()
-		# rospy.loginfo("%s %s" %(msg_camera_pose.d, msg_camera_pose.phi))
-		# self.msg_fusion.d = msg_camera_pose.d
-		# self.msg_fusion.phi = msg_camera_pose.phi
-		# self.pub_pose_est.publish(self.msg_fusion)
-		# rospy.loginfo("e %s  %s" %(self.z_m[0], self.z_m[1]))
-		# return
 
 		###
 		#camera_time = msg_camera_pose.header.stamp.secs + msg_camera_pose.header.stamp.nsecs / 1e9
@@ -283,6 +286,7 @@ class Sensor_Fusion(DTROS):
 		time_now = rospy.get_rostime().secs + rospy.get_rostime().nsecs / 1e9
 
 		self.curve_detection(time_now)
+		self.wheel_encdoer_coordinate_system_rotation()
 
 
 		## predict part
@@ -335,13 +339,24 @@ class Sensor_Fusion(DTROS):
 		# rospy.loginfo("update: %s  %s" %(self.msg_fusion.d, self.msg_fusion.phi))
 		# rospy.loginfo("camera: %s  %s" %(self.z_m[2], self.z_m[3]))
 		# rospy.loginfo("e %s  %s" %(self.z_m[0], self.z_m[1]))
-		#rospy.loginfo("u %s %s c %s %s e %s %s" %(self.msg_fusion.d, self.msg_fusion.phi, self.z_m[2], self.z_m[3], self.z_m[0], self.z_m[1]))
-		rospy.loginfo("u %s %s c %s %s e %s %s d %s" %(self.msg_fusion.d, self.msg_fusion.phi, self.z_m[2], self.z_m[3], self.z_m[0], self.z_m[1], self.distance))
+		# rospy.loginfo("u %s %s c %s %s e %s %s" %(self.msg_fusion.d, self.msg_fusion.phi, self.z_m[2], self.z_m[3], self.z_m[0], self.z_m[1]))
+		# rospy.loginfo("u %s %s c %s %s e %s %s d %s" %(self.msg_fusion.d, self.msg_fusion.phi, self.z_m[2], self.z_m[3], self.z_m[0], self.z_m[1], self.distance))
+		rospy.loginfo("c %s %s e %s d %s ticks0 %s slip %s" %(self.z_m[2], self.z_m[3], self.z_m[1], self.distance, self.a, self.b))
 
 		# rospy.loginfo(",K,%s,%s,%s,%s;%s,%s,%s,%s" %(self.K[0][0],self.K[0][1],self.K[0][2],self.K[0][3],self.K[1][0],self.K[1][1],self.K[1][2],self.K[1][3]))
 		# rospy.loginfo(",P,%s,%s;%s,%s" %(self.P[0][0],self.P[0][1],self.P[1][0],self.P[1][1]))
 		# rospy.loginfo(",A,%s,%s;%s,%s" %(self.A[0][0],self.A[0][1],self.A[1][0],self.A[1][1]))
 		# rospy.loginfo(",B,%s;%s" %(self.B[0],self.B[1]))
+
+		#only camera pose
+		# self.msg_fusion.header.stamp = rospy.get_rostime()
+		# #rospy.loginfo("%s %s" %(msg_camera_pose.d, msg_camera_pose.phi))
+		# self.msg_fusion.d = self.z_m[2]
+		# self.msg_fusion.phi = self.z_m[3]
+		# self.pub_pose_est.publish(self.msg_fusion)
+		#rospy.loginfo("c %s %s e %s d %s" %(self.z_m[2], self.z_m[3], self.z_m[1], self.distance))
+
+		# return
 		
 		return
 
