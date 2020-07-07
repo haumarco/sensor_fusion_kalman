@@ -36,10 +36,11 @@ class Sensor_Fusion(DTROS):
 		self.P = np.eye(2) #
 		self.K = np.zeros((2,3))
 		self.Q = 0.5 * np.eye(2) #
+		self.q = 5
 		self.R = 0.2 * np.eye(3) #
-		self.R[0][0] = 0.1
-		self.R[1][1] = 0.05
-		self.R[2][2] = 0.2
+		self.R[0][0] = 0.0025 #0.1
+		self.R[1][1] = 0.04 #0.05
+		self.R[2][2] = 0.0025 #0.2
 		self.I = np.eye(2)
 		self.H = np.array([[0, 1], [1, 0], [0, 1]])
 		self.v = 0
@@ -70,12 +71,15 @@ class Sensor_Fusion(DTROS):
 		self.i_recalib = 0
 		self.recalib_status = 0
 		self.count = 0
+		self.addition_phi = 0
+		self.addition_distance = 0
 		##
 		self.distance = 0
 		self.old_distance = 0
 		self.cs_transform = 0
 		self.save_alpha = np.zeros((20,1))
 		self.save_timestamp = np.zeros((20,1))
+		self.save_distance = np.zeros((20,1))
 		self.a = 0
 		self.b = 0
 
@@ -120,13 +124,15 @@ class Sensor_Fusion(DTROS):
 		
 		self.z_m[0] += alpha
 
-
-		self.distance += self.tick_to_meter * 0.5 * (self.diff_left + self.diff_right)
+		diff_d = self.tick_to_meter * 0.5 * (self.diff_left + self.diff_right)
+		self.distance += diff_d
 
 		self.save_alpha = np.append(self.save_alpha, alpha)
 		self.save_alpha = np.delete(self.save_alpha, 0)
 		self.save_timestamp = np.append(self.save_timestamp, msg_encoder_ticks.header.stamp.secs + msg_encoder_ticks.header.stamp.nsecs/1e9)
 		self.save_timestamp = np.delete(self.save_timestamp, 0)
+		self.save_distance = np.append(self.save_distance, diff_d)
+		self.save_distance = np.delete(self.save_distance, 0)
 
 		# if alpha == 0:
 		# 	self.z_m[0] += self.diff_left * self.tick_to_meter * np.sin(self.z_m[1]) 
@@ -149,7 +155,7 @@ class Sensor_Fusion(DTROS):
 		return
 
 
-	def curve_detection(self, time_now):
+	def curve_detection(self):
 
 		if self.distance - self.block_turn_r > self.length_right_curve and self.distance - self.block_turn_l > self.length_left_curve:
 
@@ -240,42 +246,6 @@ class Sensor_Fusion(DTROS):
 		if self.recalib_status == 0:
 			self.b +=1
 			self.a += self.z_m[0]
-			#rospy.loginfo("%s" %self.a)
-
-			self.save_d_cam = np.append(self.save_d_cam, self.z_m[1])
-			self.save_d_cam = np.delete(self.save_d_cam, 0)
-			self.save_phi_cam = np.append(self.save_phi_cam, self.z_m[2])
-			self.save_phi_cam = np.delete(self.save_phi_cam, 0)
-
-			# self.average_d_cam += (self.save_d_cam[9] - self.save_d_cam[0]) / 10
-			# self.average_phi_cam += (self.save_phi_cam[9] - self.save_phi_cam[0]) / 10
-			self.average_d_cam = np.mean(self.save_d_cam[3:])
-			self.average_phi_cam = np.mean(self.save_phi_cam[3:])
-			if abs(self.save_phi_cam[9]) > 0.3:
-				self.i_recalib = 5
-
-			if self.i_recalib == 10:
-				self.save_phi_enc = np.append(self.save_phi_enc, self.z_m[0])
-				self.save_phi_enc = np.delete(self.save_phi_enc, 0)
-				diff_recalib = abs(self.save_phi_enc[9] - self.save_phi_enc[0])
-				std = np.std(self.save_phi_cam[3:])
-				#rospy.loginfo("%s" %std)
-
-				#rospy.loginfo("%s %s %s" %(self.average_d_cam, self.average_phi_cam, diff_recalib))
-				#if diff_recalib < 0.05 and abs(self.average_d_cam) < 0.1 and abs(self.average_phi_cam) < 0.1:
-				#if diff_recalib < 0.05 and abs(self.average_d_cam) < 0.1 and abs(self.average_phi_cam) < 0.2 and std <0.05:
-					#old = self.z_m[1]
-					#self.z_m[0] = 0.5 * self.average_d_cam + 0.5 * self.z_m[0]
-					#self.z_m[0] = (self.save_phi_cam[9] + self.save_phi_cam[8] + self.save_phi_cam[7])/3
-					#rospy.logwarn("RECALIBRATION av_phi%s, old %s, new %s" %(self.average_phi_cam, old, self.z_m[1]))
-					#self.recalib_status = 3
-					#rospy.logwarn("RECALIBRATION")
-					
-
-			else:
-				self.save_phi_enc[self.i_recalib] = self.z_m[0]
-				self.i_recalib += 1
-
 
 		elif self.b !=0 :
 			c = self.a /self.b
@@ -294,10 +264,12 @@ class Sensor_Fusion(DTROS):
 
 
 
-	def camera_delay(self, now, image):
+	def camera_delay(self, image):
 		for i in range(0,20):
 			if self.save_timestamp[i] > image:
-				self.z_m[2] += self.save_alpha[i]
+				self.addition_phi += self.save_alpha[i]
+				self.addition_distance += self.save_distance[i]
+		self.z_m[0] -= self.addition_phi
 
 
 
@@ -330,15 +302,10 @@ class Sensor_Fusion(DTROS):
 
 		time_now = rospy.get_rostime().secs + rospy.get_rostime().nsecs / 1e9
 		time_image = msg_camera_pose.header.stamp.secs + msg_camera_pose.header.stamp.nsecs / 1e9 #nu
-		delta_t = time_now - self.time_last_est
+		delta_t = time_image - self.time_last_est
 
-		self.camera_delay(time_now, time_image)
+		self.camera_delay(time_image)
 
-		self.recalibration()
-
-
-		self.curve_detection(time_now)
-		self.wheel_encoder_coordinate_system_rotation()
 
 		## predict part
 		
@@ -356,8 +323,11 @@ class Sensor_Fusion(DTROS):
 		# linearized:
 		omega = (self.z_m[0] - self.old_z_m1)/delta_t
 		self.old_z_m1 = np.copy(self.z_m[0])
-		delta_d = self.distance - self.old_distance
+		delta_d = self.distance - self.addition_distance - self.old_distance
+		self.old_distance = self.distance - self.addition_distance
+		
 		#rospy.loginfo("%s %s %s" %(self.old_z_m1, delta_d, omega[0]))
+		self.Q = self.q * np.array([[(delta_t**3)/3, (delta_t**2)/2],[(delta_t**2)/2, delta_t]])
 
 		#EKF
 		# self.A = np.array([[1, delta_d * np.cos(self.x[1])],[0, 1]])
@@ -371,7 +341,7 @@ class Sensor_Fusion(DTROS):
 		self.P = np.dot(np.dot(self.A, self.P), self.A.T) + self.Q
 
 
-		self.time_last_est = time_now
+		self.time_last_est = time_image
 
 		self.update()
 		return
@@ -387,12 +357,24 @@ class Sensor_Fusion(DTROS):
 		self.x += np.dot(self.K, y)
 		J = self.I - np.dot(self.K, self.H)
 		self.P = np.dot(J, self.P)
+
+		self.x[1] += self.addition_phi
 		self.msg_fusion.header.stamp = rospy.get_rostime()
 		self.msg_fusion.d = self.x[0]
 		#self.msg_fusion.d = self.z_m[2]
 		self.msg_fusion.phi = self.x[1]
 		#self.msg_fusion.phi = self.z_m[1]
 		self.pub_pose_est.publish(self.msg_fusion)
+
+		self.z_m[0] += self.addition_phi
+		self.z_m[2] += self.addition_phi
+		self.recalibration()
+		self.curve_detection()
+		self.wheel_encoder_coordinate_system_rotation()
+		self.addition_phi = 0
+		self.addition_distance = 0
+
+
 
 		# rospy.loginfo("update: %s  %s" %(self.msg_fusion.d, self.msg_fusion.phi))
 		# rospy.loginfo("camera: %s  %s" %(self.z_m[2], self.z_m[3]))
