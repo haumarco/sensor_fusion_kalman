@@ -22,7 +22,7 @@ class Sensor_Fusion(DTROS):
 		self.tick_to_meter = np.pi * 0.067 / 135.   # 6.5cm diameter, 135 = #ticks per revolution
 		self.z_m = np.zeros((3, 1)) # d_enc, phi_enc, d_cam, phi_cam
 		self.old_z_m0 = 0
-		self.wheelbase = 0.103 #0.102 # ueli 1: 0.104, ueli 2: 0.101----1.03
+		self.wheelbase = 0.104 #0.102 # ueli 1: 0.104, ueli 2: 0.101----1.03
 		self.msg_fusion = FusionLanePose()
 
 		self.time_last_image = 0
@@ -70,10 +70,12 @@ class Sensor_Fusion(DTROS):
 		self.ignore_only_cam = 0
 		self.turn = 0
 		self.recalib_distance = 0
+		self.recalib_counter = 0
+		self.recalib_phi = 0
 
 		# higher pub rate
 		self.higher_pub_rate = 1 # 1 = on; 0 = off
-		self.ticks_for_pub = 12 # review
+		self.ticks_for_pub = 10 # review
 		self.sum_alpha = 0
 		self.sum_ticks = 0
 
@@ -89,8 +91,11 @@ class Sensor_Fusion(DTROS):
 
 
 	def save_wheelscmdstamped(self, msg_wheelscmdstamped):
-		self.direction_l = np.sign(msg_wheelscmdstamped.vel_left)
-		self.direction_r = np.sign(msg_wheelscmdstamped.vel_right)
+		# self.direction_l = np.sign(msg_wheelscmdstamped.vel_left)
+		# self.direction_r = np.sign(msg_wheelscmdstamped.vel_right)
+		# if self.direction_l == -1 or self.direction_r == -1:
+		# 	rospy.logwarn("MINUS")
+		return
 
 	def update_encoder_measurement_l(self, msg_encoder_ticks):
 		if self.first_encoder_meas_l == 0:
@@ -108,15 +113,19 @@ class Sensor_Fusion(DTROS):
 			diff_dist = self.tick_to_meter * 0.5 * diff_left
 			self.save_encoder_measurements(diff_dist, msg_encoder_ticks, alpha)
 		
-		if self.higher_pub_rate == 1:
-			self.sum_alpha += alpha
-			if self.sum_ticks > self.ticks_for_pub:
-				addition_phi, addition_d, not_used = self.encoder_information_until_now(msg_encoder_ticks.header.stamp.secs + msg_encoder_ticks.header.stamp.nsecs/1e9, self.x[1])
-				self.msg_fusion.header.stamp = rospy.get_rostime()
-				self.msg_fusion.d = (self.x[0] + addition_d)* 1.5 ##!!!!!
-				self.msg_fusion.phi = self.x[1] + addition_phi
-				self.pub_pose_est.publish(self.msg_fusion)
-				self.sum_alpha = 0
+			if self.higher_pub_rate == 1:
+				self.sum_alpha += alpha
+				self.sum_ticks += diff_left
+				if self.sum_ticks > self.ticks_for_pub:
+					addition_phi, addition_d, not_used = self.encoder_information_until_now(msg_encoder_ticks.header.stamp.secs + msg_encoder_ticks.header.stamp.nsecs/1e9, self.x[1])
+					self.msg_fusion.header.stamp = rospy.get_rostime()
+					self.msg_fusion.d = (self.x[0] + addition_d)* 1.5 ##!!!!!
+					self.msg_fusion.phi = self.x[1] + addition_phi
+					self.msg_fusion.in_lane = True
+					self.pub_pose_est.publish(self.msg_fusion)
+					self.sum_alpha = 0
+					self.sum_ticks = 0
+					#rospy.loginfo("high_pub_enc phi: %s   d: %s" %(self.msg_fusion.phi, self.msg_fusion.d))
 
 		return
 
@@ -132,19 +141,24 @@ class Sensor_Fusion(DTROS):
 			alpha = self.tick_to_meter * diff_right / self.wheelbase
 			self.z_m[0] += alpha
 			self.b += alpha
-			#rospy.loginfo("l_%s" %(diff_right))
+			#rospy.loginfo("TIMESTAMP %s.%s" %(msg_encoder_ticks.header.stamp.secs, msg_encoder_ticks.header.stamp.nsecs))
 			diff_dist = self.tick_to_meter * 0.5 * diff_right
 			self.save_encoder_measurements(diff_dist, msg_encoder_ticks, alpha)
 
-		if self.higher_pub_rate == 1:
-			self.sum_alpha += alpha
-			if self.sum_ticks > self.ticks_for_pub:
-				addition_phi, addition_d, not_used = self.encoder_information_until_now(msg_encoder_ticks.header.stamp.secs + msg_encoder_ticks.header.stamp.nsecs/1e9, self.x[1])
-				self.msg_fusion.header.stamp = rospy.get_rostime()
-				self.msg_fusion.d = (self.x[0] + addition_d)* 1.5 ##!!!!!
-				self.msg_fusion.phi = self.x[1] + addition_phi
-				self.pub_pose_est.publish(self.msg_fusion)
-				self.sum_alpha = 0
+			if self.higher_pub_rate == 1:
+				self.sum_alpha += alpha
+				self.sum_ticks += diff_right
+				if self.sum_ticks > self.ticks_for_pub:
+					addition_phi, addition_d, not_used = self.encoder_information_until_now(msg_encoder_ticks.header.stamp.secs + msg_encoder_ticks.header.stamp.nsecs/1e9, self.x[1])
+					self.msg_fusion.header.stamp = rospy.get_rostime()
+					self.msg_fusion.d = (self.x[0] + addition_d)* 1.5 ##!!!!!
+					self.msg_fusion.phi = self.x[1] + addition_phi
+					self.msg_fusion.in_lane = True
+					self.pub_pose_est.publish(self.msg_fusion)
+					self.sum_alpha = 0
+					self.sum_ticks = 0
+					#rospy.loginfo("high_pub_enc phi: %s   d: %s" %(self.msg_fusion.phi, self.msg_fusion.d))
+
 
 		return
 
@@ -154,16 +168,16 @@ class Sensor_Fusion(DTROS):
 
 		self.save_alpha = np.append(self.save_alpha, alpha)
 		self.save_alpha = np.delete(self.save_alpha, 0)
-		self.save_timestamp = np.append(self.save_timestamp, msg_encoder_ticks.header.stamp.secs + msg_encoder_ticks.header.stamp.nsecs/1e9)
+		#self.save_timestamp = np.append(self.save_timestamp, msg_encoder_ticks.header.stamp.secs + msg_encoder_ticks.header.stamp.nsecs/1e9)
+		self.save_timestamp = np.append(self.save_timestamp, rospy.get_rostime().secs + rospy.get_rostime().nsecs / 1e9)
 		self.save_timestamp = np.delete(self.save_timestamp, 0)
-
 		self.save_distance = np.append(self.save_distance, diff_dist)
 		self.save_distance = np.delete(self.save_distance, 0)
 
 		return
 
 
-	def curve_detection(self, addition_phi):
+	def curve_detection(self, addition_phi, addition_d):
 
 		if abs(self.z_m[0]) > 1:
 			rospy.loginfo("turn %s" %(self.z_m[0]))
@@ -176,10 +190,11 @@ class Sensor_Fusion(DTROS):
 			rospy.loginfo("only cam c: %s  e: %s %s" %(self.z_m[2], self.z_m[0], self.b))
 			self.msg_fusion.header.stamp = rospy.get_rostime()
 			#rospy.loginfo("%s %s" %(msg_camera_pose.d, msg_camera_pose.phi))
-			self.msg_fusion.d = self.z_m[1]
+			self.msg_fusion.d = self.z_m[1] + addition_d
 			self.msg_fusion.phi = self.z_m[2] + addition_phi
 			self.pub_pose_est.publish(self.msg_fusion)
-
+			self.x[0] = self.msg_fusion.d
+			self.x[1] = self.msg_fusion.phi
 			return(1)
 		else:
 			self.ignore_only_cam = 0
@@ -208,27 +223,27 @@ class Sensor_Fusion(DTROS):
 			rospy.logwarn("1")
 
 		if self.recalib_status == 1 and self.distance - self.recalib_distance > 0.3 and self.distance - self.recalib_distance < 0.6:
-			self.b +=1
-			self.a += self.z_m[0]
+			self.recalib_counter +=1
+			self.recalib_phi += self.z_m[0]
 			rospy.loginfo("recalib")
 
 		elif self.recalib_status == 1 and self.distance -self.recalib_distance > 0.6:
-			c = self.a /self.b
+			c = self.recalib_phi /self.recalib_counter
 			rospy.loginfo("gemittelt:%s" %c)
 			self.recalib_status = 0
 			if abs(c) > 0.1:
 				self.count += 1
 				self.turn = 2
-				self.a = 0
+				self.recalib_phi = 0
 				if self.count == 2:
 					self.z_m[0] -= 1.2 * c
 					rospy.logwarn("RECALIB")
 					self.count = 0
 					self.turn = 0
-					self.b = 0
+					self.recalib_counter = 0
 			else:
-				self.a = 0
-				self.b = 0
+				self.recalib_phi = 0
+				self.recalib_counter = 0
 				self.count = 0
 				self.turn = 0
 
@@ -244,11 +259,17 @@ class Sensor_Fusion(DTROS):
 			if self.save_timestamp[i] > t_image:
 				##
 				phi += self.save_alpha[i]
-				addition_d += self.save_distance * np.sin(phi)
+				addition_d += self.save_distance[i] * np.sin(phi)
 				addition_phi += self.save_alpha[i]
 				addition_distance += self.save_distance[i]
+			
 
-		return(addition_phi, addition_distance, addition_d)
+		# rospy.loginfo("phi %s" %(addition_phi))	
+		# rospy.loginfo("d %s" %(addition_d))	
+		# rospy.loginfo("dist %s" %(addition_distance))	
+
+
+		return(addition_phi, float(addition_d), addition_distance)
 
 
 
@@ -290,11 +311,13 @@ class Sensor_Fusion(DTROS):
 		delta_t = time_image - self.time_last_est
 
 		addition_phi, addition_d, addition_distance = self.encoder_information_until_now(time_image, self.x[1])
-		self.z_m[0] -= addition_phi
+		#addition_phi, addition_d, addition_distance = 0,0,0
 
-		if self.curve_detection(addition_phi) == 1:
+
+		if self.curve_detection(addition_phi, addition_d) == 1:
 			return
 
+		self.z_m[0] -= addition_phi
 
 		## predict part
 		
@@ -306,7 +329,7 @@ class Sensor_Fusion(DTROS):
 		
 
 		# review: choose Q
-		self.Q = self.q * np.array([[(delta_t**3)/3, (delta_t**2)/2],[(delta_t**2)/2, delta_t]])
+		#self.Q = self.q * np.array([[(delta_t**3)/3, (delta_t**2)/2],[(delta_t**2)/2, delta_t]])
 
 		#EKF
 		# A = np.array([[1, delta_d * np.cos(self.x[1])],[0, 1]])
@@ -335,6 +358,7 @@ class Sensor_Fusion(DTROS):
 		self.msg_fusion.header.stamp = rospy.get_rostime()
 		self.msg_fusion.d = (self.x[0] + addition_d) * 1.5 ##!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 		self.msg_fusion.phi = self.x[1] + addition_phi
+		self.msg_fusion.in_lane = msg_camera_pose.in_lane
 		self.pub_pose_est.publish(self.msg_fusion)
 
 

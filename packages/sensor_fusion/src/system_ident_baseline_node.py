@@ -26,7 +26,6 @@ class Sensor_Fusion(DTROS):
 		self.last_zm0 = 0
 		self.old_z_m0 = 0
 		self.wheelbase = 0.1 #0.102 # ueli 1: 0.104, ueli 2: 0.101----1.03
-		self.corretion_factor = 1.05 # ueli 1: 1.05, ueli 2: 1.03---- 1
 		self.msg_fusion = FusionLanePose()
 
 		self.A = np.array([])
@@ -97,7 +96,7 @@ class Sensor_Fusion(DTROS):
 		self.direction_r = 1
 
 		self.ignore_only_cam = 0
-		self.turn = 0
+		self.turn = 1
 		self.recalib_distance = 0
 
 
@@ -160,8 +159,8 @@ class Sensor_Fusion(DTROS):
 
 	def curve_detection(self):
 
-		if abs(self.z_m[0]) > 1.3:
-			self.z_m[0] = 0
+		if abs(self.z_m[0]) > 2.4:
+			self.z_m[0] -= np.sign(self.z_m[0]) * np.pi/2
 			self.turn += 1
 
 
@@ -198,7 +197,7 @@ class Sensor_Fusion(DTROS):
 
 		if self.turn != 0:
 			axle = 0.1 * self.b / (self.turn * np.pi/2)
-			#rospy.loginfo("turns: %s phi_tot: %s baseline: %s" %(self.turn, self.b, axle))
+			rospy.loginfo("turns: %s phi_tot: %s baseline: %s" %(self.turn, self.b, axle))
 
 		return
 
