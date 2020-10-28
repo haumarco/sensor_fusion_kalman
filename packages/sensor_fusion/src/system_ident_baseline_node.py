@@ -106,11 +106,11 @@ class Sensor_Fusion(DTROS):
 		# Subscriber
 		#self.sub_encoder_ticks =rospy.Subscriber("encoder_ticks_node/encoder_ticks", EncoderTicksStamped, self.update_encoder_measurement, queue_size=1)
 		self.sub_camera_pose =rospy.Subscriber("lane_filter_node/lane_pose", LanePose, self.predict, queue_size=1)
-		self.sub_controls = rospy.Subscriber("lane_controller_node/car_cmd", Twist2DStamped, self.save_inputs, queue_size=1)	
+		#self.sub_controls = rospy.Subscriber("lane_controller_node/car_cmd", Twist2DStamped, self.save_inputs, queue_size=1)	
 		#/sepp/left_wheel_encoder_node/tick
-		self.sub_encoder_ticks =rospy.Subscriber("left_wheel_encoder_node/tick", WheelEncoderStamped, self.update_encoder_measurement_l, queue_size=1)
-		self.sub_encoder_ticks =rospy.Subscriber("right_wheel_encoder_node/tick", WheelEncoderStamped, self.update_encoder_measurement_r, queue_size=1)
-		self.sub_encoder_ticks =rospy.Subscriber("wheels_driver_node/wheels_cmd_executed", WheelsCmdStamped, self.save_wheelscmdstamped, queue_size=1)
+		#self.sub_encoder_ticks =rospy.Subscriber("left_wheel_encoder_node/tick", WheelEncoderStamped, self.update_encoder_measurement_l, queue_size=1)
+		#self.sub_encoder_ticks =rospy.Subscriber("right_wheel_encoder_node/tick", WheelEncoderStamped, self.update_encoder_measurement_r, queue_size=1)
+		#self.sub_encoder_ticks =rospy.Subscriber("wheels_driver_node/wheels_cmd_executed", WheelsCmdStamped, self.save_wheelscmdstamped, queue_size=1)
 
 	def save_inputs(self, msg_Twist2DStamped):
 		#self.v = msg_Twist2DStamped.v
@@ -190,16 +190,18 @@ class Sensor_Fusion(DTROS):
 		self.msg_fusion.phi = msg_camera_pose.phi
 		self.pub_pose_est.publish(self.msg_fusion)
 		#rospy.loginfo("e %s" %(self.z_m[0]))
-		# return
-
-
-		self.curve_detection()
-
-		if self.turn != 0:
-			axle = 0.1 * self.b / (self.turn * np.pi/2)
-			rospy.loginfo("turns: %s phi_tot: %s baseline: %s" %(self.turn, self.b, axle))
-
 		return
+
+
+##
+		# self.curve_detection()
+
+		# if self.turn != 0:
+		# 	axle = 0.1 * self.b / (self.turn * np.pi/2)
+		# 	rospy.loginfo("turns: %s phi_tot: %s baseline: %s" %(self.turn, self.b, axle))
+
+		# return
+##
 
 
 
