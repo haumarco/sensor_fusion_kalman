@@ -4,7 +4,7 @@
   <description>
   None
   </description>
-  <maintainer email="todo0@todo.com">todo</maintainer>
+  <maintainer email="haumarco0@ethz.com">Marco Hauswirth</maintainer>
   <license>None</license>
 
   <buildtool_depend>catkin</buildtool_depend>
